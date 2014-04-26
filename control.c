@@ -304,9 +304,6 @@ void PID (struct vector setPoint, double time)
 	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
 	printf ("%lf, %lf\n", setPoint.x, sensor.x);
-	//printf ("%lf\n", pidOut);
-	//printf ("%d\n", pidOut * 100000000);
-	//if (setVelocity (&xAxis, -100000000)) {exitFunction (1);}
 	setVelocity (&xAxis, (int)(pidOut * -100000000));
 
 	lastError = error;
@@ -381,18 +378,10 @@ int main (int argc, char **argv)
 	gettimeofday (&progStart, NULL);
 
 	while (1) {
-		struct vector point = {1.0, 0.0, 0.0};
+		struct vector point = {0.0, 0.0, 0.0};
 		time = gettimefromfunction (progStart);
 		PID (point, time);
 	}
-
-	/*
-	if (setVelocity (&xAxis, -100000000)) {exitFunction (1);}
-	while (1) {
-		readSensors (&sensorX, &sensorY, &sensorZ);
-		printf ("%f, %f, %f\n", sensorX, sensorY, sensorZ);
-	}
-	*/
 
 	/*
 	//Ramp up
