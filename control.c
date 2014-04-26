@@ -28,6 +28,10 @@
  * Clean up this abomination
  */
 
+struct axisInfo xAxis;
+struct axisInfo yAxis;
+struct axisInfo zAxis;
+
 struct axisInfo {
 	FILE *run;
 	FILE *duty;
@@ -36,7 +40,7 @@ struct axisInfo {
 };
 
 struct vector {
-        double  x,
+        float	x,
                 y,
                 z;
 };
@@ -274,6 +278,41 @@ unsigned int setVelocity (struct axisInfo *axis, int velocity)
 	return 0;
 }
 
+void PID (struct vector setPoint, double time)
+{
+	static double lastTime = 0.0;
+	static double error = 0.0;
+	double lastError;
+	double dt;
+	static double integral = 0.0;
+	static double derivative = 0.0;
+
+	double Kp = 1.0;
+	double Ki = 0.0;
+	double Kd = 0.0;
+	double pidOut;
+
+	struct vector sensor;
+
+	readSensors (&sensor.x, &sensor.y, &sensor.z);
+
+	error = setPoint.x - sensor.x;
+	dt = time - lastTime;
+	integral += error * dt;
+	derivative = (error - lastError) / dt;
+
+	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
+
+	printf ("%lf, %lf\n", setPoint.x, sensor.x);
+	//printf ("%lf\n", pidOut);
+	//printf ("%d\n", pidOut * 100000000);
+	//if (setVelocity (&xAxis, -100000000)) {exitFunction (1);}
+	setVelocity (&xAxis, (int)(pidOut * -100000000));
+
+	lastError = error;
+	lastTime = time;
+}
+
 int main (int argc, char **argv)
 {
 	struct rampInfo ramp[2];
@@ -307,15 +346,11 @@ int main (int argc, char **argv)
 	prussdrv_init();
 	prussdrv_open(PRU_EVTOUT_0);
 	prussdrv_pruintc_init(&pruss_intc_initdata);
-	prussdrv_exec_program(PRU_NUM,"./cnc.bin");
+	prussdrv_exec_program(PRU_NUM,"./sensor.bin");
 
 	static void *sharedMem;
 	prussdrv_map_prumem (PRUSS0_SHARED_DATARAM, &sharedMem);
 	sharedMem_int = (unsigned int *)sharedMem;
-
-	struct axisInfo xAxis;
-	struct axisInfo yAxis;
-	struct axisInfo zAxis;
 
 	if (startupAxis (&xAxis, 30, 'x')) {exitFunction (1);}
 	if (startupAxis (&yAxis, 60, 'y')) {exitFunction (1);}
@@ -328,14 +363,6 @@ int main (int argc, char **argv)
 	float zZero = 0;
 
 	float sensorX, sensorY, sensorZ;
-
-	/*
-	if (setVelocity (&xAxis, -100000000)) {exitFunction (1);}
-	while (1) {
-		readSensors (&sensorX, &sensorY, &sensorZ);
-		printf ("%f, %f, %f\n", sensorX, sensorY, sensorZ);
-	}
-	*/
 
 	file = fopen (argv[1], "r");
 
@@ -353,6 +380,21 @@ int main (int argc, char **argv)
 
 	gettimeofday (&progStart, NULL);
 
+	while (1) {
+		struct vector point = {1.0, 0.0, 0.0};
+		time = gettimefromfunction (progStart);
+		PID (point, time);
+	}
+
+	/*
+	if (setVelocity (&xAxis, -100000000)) {exitFunction (1);}
+	while (1) {
+		readSensors (&sensorX, &sensorY, &sensorZ);
+		printf ("%f, %f, %f\n", sensorX, sensorY, sensorZ);
+	}
+	*/
+
+	/*
 	//Ramp up
 	for (startTime = time, diffTime = 0.0; diffTime < ramp[0].time; time = gettimefromfunction (progStart)) {
 		diffTime = time - startTime;
@@ -381,6 +423,7 @@ int main (int argc, char **argv)
 		diffTime = time - startTime;
 		point = addVec (line[lineNum - 2].end, addVec (multVec (ramp[1].accel, -0.5 * pow (diffTime, 2.0)), multVec (line[lineNum - 2].velocity, diffTime)));
         }
+	*/
 
 	free (arc);
 	free (line);
