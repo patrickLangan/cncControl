@@ -26,7 +26,6 @@
 /*
  * Get rid of exitFunction macro
  * Repace file functions with bash
- * Add Kalman filter
  * Follow G-code path
  * Only run when a new sensor reading comes in
  * Replace pwm with pru program
@@ -294,30 +293,53 @@ void PID (struct vector setPoint, double time)
 	double Kp = 1.0;
 	double Ki = 0.0;
 	double Kd = 0.0;
-	double pidOut;
+	static double pidOut = 0.0;
 
 	struct vector sensor;
+
+	const float K = 0.07;
+	static float X = 0.0;
+	float Xest;
+
+	const float maxVel = 1.5;
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
 	sensor.x -= sensorInit.x;
 	sensor.y -= sensorInit.y;
 	sensor.z -= sensorInit.z;
 
-	error = setPoint.x - sensor.x;
-	dt = time - lastTime;
+	dt = (time - lastTime) * 1e-3;
+
+	if (fabs (sensor.x - X) > fabs (maxVel * dt))
+		goto endFunc;
+
+	Xest = X + (pidOut * dt);
+	X = Xest + (K * (sensor.x - Xest));
+
+	error = setPoint.x - X;
 	integral += error * dt;
 	derivative = (error - lastError) / dt;
 
 	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
-	printf ("%lf, %lf, %f\n", setPoint.x, sensor.x, pidOut);
+	printf ("%lf\t%lf\t%f\n", pidOut, sensor.x, X);
 	setVelocity (&xAxis, -pidOut);
 
 	lastError = error;
 	lastTime = time;
 
+	endFunc:;
+
 	struct timespec waitTime = {0, 5000000};
 	nanosleep (&waitTime, NULL);
+}
+
+int compareFloats (const void *a, const void *b)
+{
+	const float *fa = (const float *)a;
+	const float *fb = (const float *)b;
+
+	return (*fa > *fb) - (*fa < *fb);
 }
 
 int main (int argc, char **argv)
@@ -336,9 +358,13 @@ int main (int argc, char **argv)
 
         struct vector point;
 
-	struct vector sensor;
+	const int initPointNum = 100;
+	float *initArrayX;
+	float *initArrayY;
+	float *initArrayZ;
 
 	unsigned int i;
+	unsigned int j;
 
 	if (argc < 2) {
 		fprintf (stderr, "You need to give a file name\n");
@@ -381,15 +407,31 @@ int main (int argc, char **argv)
 
 	fclose (file);
 
-	for (i = 0; i < 100; i++) {
-		readSensors (&sensor.x, &sensor.y, &sensor.z);
-		sensorInit.x += sensor.x;
-		sensorInit.y += sensor.y;
-		sensorInit.z += sensor.z;
+	/*
+	 * Finding the sensors zero point
+	 */
+	initArrayX = malloc (initPointNum * sizeof(*initArrayX));
+	initArrayY = malloc (initPointNum * sizeof(*initArrayY));
+	initArrayZ = malloc (initPointNum * sizeof(*initArrayZ));
+
+	for (i = 0; i < initPointNum; i++) {
+		struct timespec waitTime = {0, 5000000};
+		readSensors (&initArrayX[i], &initArrayY[i], &initArrayZ[i]);
+		nanosleep (&waitTime, NULL);
 	}
-	sensorInit.x /= 100.0;
-	sensorInit.y /= 100.0;
-	sensorInit.z /= 100.0;
+
+	qsort (initArrayX, initPointNum, sizeof(*initArrayX), compareFloats);
+	sensorInit.x = initArrayX[50];
+
+	qsort (initArrayY, initPointNum, sizeof(*initArrayY), compareFloats);
+	sensorInit.y = initArrayY[50];
+
+	qsort (initArrayZ, initPointNum, sizeof(*initArrayZ), compareFloats);
+	sensorInit.z = initArrayZ[50];
+
+	free (initArrayX);
+	free (initArrayY);
+	free (initArrayZ);
 
 	gettimeofday (&progStart, NULL);
 
