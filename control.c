@@ -72,6 +72,8 @@ struct rampInfo {
         double time;
 };
 
+struct vector sensorInit = {0.0, 0.0, 0.0};
+
 static unsigned int *sharedMem_int;
 
 struct vector addVec (struct vector in1, struct vector in2)
@@ -297,6 +299,9 @@ void PID (struct vector setPoint, double time)
 	struct vector sensor;
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
+	sensor.x -= sensorInit.x;
+	sensor.y -= sensorInit.y;
+	sensor.z -= sensorInit.z;
 
 	error = setPoint.x - sensor.x;
 	dt = time - lastTime;
@@ -330,6 +335,8 @@ int main (int argc, char **argv)
 	double diffTime;
 
         struct vector point;
+
+	struct vector sensor;
 
 	unsigned int i;
 
@@ -374,10 +381,20 @@ int main (int argc, char **argv)
 
 	fclose (file);
 
+	for (i = 0; i < 100; i++) {
+		readSensors (&sensor.x, &sensor.y, &sensor.z);
+		sensorInit.x += sensor.x;
+		sensorInit.y += sensor.y;
+		sensorInit.z += sensor.z;
+	}
+	sensorInit.x /= 100.0;
+	sensorInit.y /= 100.0;
+	sensorInit.z /= 100.0;
+
 	gettimeofday (&progStart, NULL);
 
 	while (1) {
-		struct vector point = {0.0, 0.0, 0.0};
+		point = (struct vector){-0.5, 0.0, 0.0};
 		time = gettimefromfunction (progStart);
 		PID (point, time);
 	}
