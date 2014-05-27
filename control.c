@@ -14,6 +14,8 @@
 #include <prussdrv.h>
 #include <pruss_intc_mapping.h>
 
+#include <time.h>
+
 #define PRU_NUM 0
 #define OFFSET_SHAREDRAM 2048
 
@@ -24,7 +26,10 @@
 /*
  * Get rid of exitFunction macro
  * Repace file functions with bash
- * Add pid function
+ * Add Kalman filter
+ * Follow G-code path
+ * Only run when a new sensor reading comes in
+ * Replace pwm with pru program
  * Clean up this abomination
  */
 
@@ -239,41 +244,38 @@ void readSensors (float *x, float *y, float *z)
 	*z = 0.0003904191149 * ((float)resultZ);
 }
 
-/*
- * Velocity is measured in inches per giga-seconds
- */
-unsigned int setVelocity (struct axisInfo *axis, int velocity)
+unsigned int setVelocity (struct axisInfo *axis, float velocity)
 {
 	static unsigned int direction = 1;
-	unsigned int speed;
+	float speed;
 	unsigned int period;
 	unsigned int duty;
 
 	if (velocity < 0) {
-		speed = abs (velocity);
+		speed = fabs (velocity);
 		if (direction != 0) {
 			direction = 0;
-			if ((fprintf (axis->direction, "0")) < 0) {return 1;}
-			if (fflush (axis->direction)) {return 1;}
+			fprintf (axis->direction, "0");
+			fflush (axis->direction);
 		}
 	} else {
 		speed = velocity;
 		if (direction != 1) {
 			direction = 1;
-			if ((fprintf (axis->direction, "1")) < 0) {return 1;}
-			if (fflush (axis->direction)) {return 1;}
+			fprintf (axis->direction, "1");
+			fflush (axis->direction);
 		}
 	}
 
-	period = 500000000000000 / speed;
-	duty = 250000000000000 / speed;
+	period = (int)(500000.0 / speed);
+	duty = (int)(250000.0 / speed);
 
-	if ((fprintf (axis->duty, "0")) < 0) {return 1;}
-	if (fflush (axis->duty)) {return 1;}
-	if ((fprintf (axis->period, "%d", period)) < 0) {return 1;}
-	if (fflush (axis->period)) {return 1;}
-	if ((fprintf (axis->duty, "%d", duty)) < 0) {return 1;}
-	if (fflush (axis->duty)) {return 1;}
+	fprintf (axis->duty, "0");
+	fflush (axis->duty);
+	fprintf (axis->period, "%d", period);
+	fflush (axis->period);
+	fprintf (axis->duty, "%d", duty);
+	fflush (axis->duty);
 
 	return 0;
 }
@@ -303,11 +305,14 @@ void PID (struct vector setPoint, double time)
 
 	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
-	printf ("%lf, %lf\n", setPoint.x, sensor.x);
-	setVelocity (&xAxis, (int)(pidOut * -100000000));
+	printf ("%lf, %lf, %f\n", setPoint.x, sensor.x, pidOut);
+	setVelocity (&xAxis, -pidOut);
 
 	lastError = error;
 	lastTime = time;
+
+	struct timespec waitTime = {0, 5000000};
+	nanosleep (&waitTime, NULL);
 }
 
 int main (int argc, char **argv)
@@ -354,12 +359,6 @@ int main (int argc, char **argv)
 	if (startupAxis (&zAxis, 31, 'z')) {exitFunction (1);}
 
 	waitEvent ();
-
-	float xZero = 0;
-	float yZero = 0;
-	float zZero = 0;
-
-	float sensorX, sensorY, sensorZ;
 
 	file = fopen (argv[1], "r");
 
