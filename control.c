@@ -26,7 +26,8 @@
 /*
  * Get rid of exitFunction macro
  * Repace file functions with bash
- * Follow G-code path
+ * Motors are slow to respond
+ * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
  * Replace pwm with pru program
  * Clean up this abomination
@@ -53,7 +54,7 @@ struct arcInfo {
         struct vector	toSurf,
         		center,
         		cross;
-        double	radius,
+        float	radius,
 		angle,
 		accel,
 		time;
@@ -63,12 +64,12 @@ struct lineInfo {
         struct vector	velocity,
         		start,
         		end;
-        double time;
+        float time;
 };
 
 struct rampInfo {
         struct vector accel;
-        double time;
+        float time;
 };
 
 struct vector sensorInit = {0.0, 0.0, 0.0};
@@ -80,19 +81,37 @@ struct vector addVec (struct vector in1, struct vector in2)
         return (struct vector){in1.x + in2.x, in1.y + in2.y, in1.z + in2.z};
 }
 
-struct vector multVec (struct vector vec, double scaler)
+struct vector subVec (struct vector in1, struct vector in2)
+{
+        return (struct vector){in1.x - in2.x, in1.y - in2.y, in1.z - in2.z};
+}
+
+struct vector multVec (struct vector vec, float scaler)
 {
         return (struct vector){vec.x * scaler, vec.y * scaler, vec.z * scaler};
 }
 
-double magnitude (struct vector input)
+float magnitude (struct vector input)
 {
         return fabs (sqrt (pow (input.x, 2) + pow (input.y, 2) + pow (input.z, 2)));
 }
 
-struct vector getArcPos (struct arcInfo arc, double angle)
+int normalize (struct vector *input)
 {
-        double  cosAngle,
+	float mag;
+	
+	mag = magnitude (*input);
+
+	input->x /= mag;
+	input->y /= mag;
+	input->z /= mag;
+
+	return 0;
+}
+
+struct vector getArcPos (struct arcInfo arc, float angle)
+{
+        float  cosAngle,
                 sinAngle;
 
         cosAngle = cos (angle);
@@ -105,13 +124,13 @@ struct vector getArcPos (struct arcInfo arc, double angle)
         };
 }
 
-double gettimefromfunction (struct timeval startTime)
+float gettimefromfunction (struct timeval startTime)
 {
 	struct timeval curTime;
 
 	gettimeofday (&curTime, NULL);
 
-	return ((double)(curTime.tv_sec - startTime.tv_sec) * 1e3) + ((double)(curTime.tv_usec - startTime.tv_usec) * 1e-3);
+	return ((float)(curTime.tv_sec - startTime.tv_sec) * 1e3) + ((float)(curTime.tv_usec - startTime.tv_usec) * 1e-3);
 }
 
 unsigned int getFd (FILE **file, char *path, char *name)
@@ -281,39 +300,41 @@ unsigned int setVelocity (struct axisInfo *axis, float velocity)
 	return 0;
 }
 
-void PID (struct vector setPoint, double time)
+void PID (struct vector setPoint, struct vector velocity, float time)
 {
-	static double lastTime = 0.0;
-	static double error = 0.0;
-	double lastError;
-	double dt;
-	static double integral = 0.0;
-	static double derivative = 0.0;
+	static float lastTime = 0.0;
+	static float error = 0.0;
+	float lastError;
+	float dt;
+	static float integral = 0.0;
+	static float derivative = 0.0;
 
-	double Kp = 1.0;
-	double Ki = 0.0;
-	double Kd = 0.0;
-	static double pidOut = 0.0;
+	float Kp = 10.0;
+	float Ki = 50.0;
+	float Kd = 0.5;
+	static float pidOut = 0.0;
 
 	struct vector sensor;
 
-	const float K = 0.07;
+	const float K = 0.4;
 	static float X = 0.0;
 	float Xest;
 
-	const float maxVel = 1.5;
+	const float maxVel = 1.0;
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
 	sensor.x -= sensorInit.x;
 	sensor.y -= sensorInit.y;
 	sensor.z -= sensorInit.z;
 
-	dt = (time - lastTime) * 1e-3;
+	dt = (time - lastTime);
 
-	if (fabs (sensor.x - X) > fabs (maxVel * dt))
+	if (fabs (sensor.x - X) > fabs (maxVel * dt)) {
+		puts ("bad data");
 		goto endFunc;
+	}
 
-	Xest = X + (pidOut * dt);
+	Xest = X + ((velocity.x + pidOut) * dt);
 	X = Xest + (K * (sensor.x - Xest));
 
 	error = setPoint.x - X;
@@ -322,8 +343,8 @@ void PID (struct vector setPoint, double time)
 
 	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
-	printf ("%lf\t%lf\t%f\n", pidOut, sensor.x, X);
-	setVelocity (&xAxis, -pidOut);
+	printf ("%f, %f, %f, %f\n", sensor.x, X, Xest, pidOut);
+	setVelocity (&xAxis, -velocity.x - pidOut);
 
 	lastError = error;
 	lastTime = time;
@@ -352,11 +373,12 @@ int main (int argc, char **argv)
 
 	struct timeval progStart;
 
-	double time = 0;
-	double startTime;
-	double diffTime;
+	float time = 0;
+	float startTime;
+	float diffTime;
 
-        struct vector point;
+        struct vector point = {0.0, 0.0, 0.0};
+        struct vector velocity = {0.0, 0.0, 0.0};
 
 	const int initPointNum = 100;
 	float *initArrayX;
@@ -393,7 +415,10 @@ int main (int argc, char **argv)
 
 	waitEvent ();
 
-	file = fopen (argv[1], "r");
+	if (!(file = fopen (argv[1], "r"))) {
+		perror ("Faild to open file");
+		exit (1);
+	}
 
 	fread (&lineNum, sizeof(int), 1, file);
 
@@ -433,44 +458,66 @@ int main (int argc, char **argv)
 	free (initArrayY);
 	free (initArrayZ);
 
+	sleep (1);
+
 	gettimeofday (&progStart, NULL);
 
-	while (1) {
-		point = (struct vector){-0.5, 0.0, 0.0};
-		time = gettimefromfunction (progStart);
-		PID (point, time);
-	}
+	time = gettimefromfunction (progStart) * 1e-3;
 
-	/*
 	//Ramp up
-	for (startTime = time, diffTime = 0.0; diffTime < ramp[0].time; time = gettimefromfunction (progStart)) {
+	for (startTime = time, diffTime = 0.0; diffTime < ramp[0].time; time = gettimefromfunction (progStart) * 1e-3) {
 		diffTime = time - startTime;
 		point = multVec (ramp[0].accel, 0.5 * pow (diffTime, 2.0));
+		velocity = multVec (ramp[0].accel, diffTime);
+		printf ("%f, ", point.x);
+		PID (point, velocity, time);
         }
 
         for (i = 0; ; i++) {
 		//Line
-		for (startTime = time, diffTime = 0.0; diffTime < line[i].time; time = gettimefromfunction (progStart)) {
+		for (startTime = time, diffTime = 0.0; diffTime < line[i].time; time = gettimefromfunction (progStart) * 1e-3) {
 			diffTime = time - startTime;
 			point = addVec (line[i].start, multVec (line[i].velocity, diffTime));
+			velocity = line[i].velocity;
+			printf ("%f, ", point.x);
+			PID (point, velocity, time);
 		}
 
                 if (i == lineNum - 2)
                         break;
 
 		//Arc
-		for (startTime = time, diffTime = 0.0; diffTime < arc[i].time; time = gettimefromfunction (progStart)) {
+		for (startTime = time, diffTime = 0.0; diffTime < arc[i].time; time = gettimefromfunction (progStart) * 1e-3) {
+			float curAngle;
+			float velMag;
+			struct vector tangent;
+
 			diffTime = time - startTime;
-                        point = getArcPos (arc[i], ((0.5 * arc[i].accel * pow (diffTime, 2.0)) + (magnitude (line[i].velocity) * diffTime)) / arc[i].radius);
+
+			curAngle = ((0.5 * arc[i].accel * pow (diffTime, 2.0)) + (magnitude (line[i].velocity) * diffTime)) / arc[i].radius;
+                        point = getArcPos (arc[i], curAngle);
+
+			printf ("%f, ", point.x);
+
+			tangent = getArcPos (arc[i], curAngle + (M_PI / 2));
+			tangent =  subVec (tangent, arc[i].center);
+			normalize (&tangent);
+
+			velMag = ((magnitude (line[i + 1].velocity) - magnitude (line[i].velocity)) * (diffTime / arc[i].time)) + magnitude (line[i].velocity);
+			velocity = multVec (tangent, velMag);
+
+			PID (point, velocity, time);
 		}
         }
 
 	//Ramp down
-	for (startTime = time, diffTime = 0.0; diffTime < ramp[1].time; time = gettimefromfunction (progStart)) {
+	for (startTime = time, diffTime = 0.0; diffTime < ramp[1].time; time = gettimefromfunction (progStart) * 1e-3) {
 		diffTime = time - startTime;
 		point = addVec (line[lineNum - 2].end, addVec (multVec (ramp[1].accel, -0.5 * pow (diffTime, 2.0)), multVec (line[lineNum - 2].velocity, diffTime)));
+		velocity = addVec (multVec (ramp[1].accel, diffTime), line[lineNum - 2].velocity);
+		printf ("%f, ", point.x);
+		PID (point, velocity, time);
         }
-	*/
 
 	free (arc);
 	free (line);
