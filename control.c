@@ -10,11 +10,11 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
+#include <setjmp.h>
 
 #include <prussdrv.h>
 #include <pruss_intc_mapping.h>
-
-#include <time.h>
 
 #define PRU_NUM 0
 #define OFFSET_SHAREDRAM 2048
@@ -29,8 +29,16 @@
  * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
  * Replace pwm with pru program
+ * Error checking
  * Clean up this abomination
  */
+
+static jmp_buf buf;
+
+void signalCatcher (int null)
+{
+	longjmp (buf, 1);
+}
 
 struct axisInfo xAxis;
 struct axisInfo yAxis;
@@ -337,6 +345,11 @@ int main (int argc, char **argv)
 	unsigned int i;
 	unsigned int j;
 
+	if (setjmp (buf))
+		goto shutdown;
+
+	signal (SIGINT, signalCatcher);
+
 	if (argc < 2) {
 		fprintf (stderr, "You need to give a file name\n");
 		return 1;
@@ -365,7 +378,7 @@ int main (int argc, char **argv)
 	waitEvent ();
 
 	if (!(file = fopen (argv[1], "r"))) {
-		perror ("Faild to open file");
+		perror ("Failed to open file");
 		exit (1);
 	}
 
@@ -470,6 +483,8 @@ int main (int argc, char **argv)
 
 	free (arc);
 	free (line);
+
+	shutdown:
 
 	exitFunction (0);
 
