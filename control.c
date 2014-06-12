@@ -1,14 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <glob.h>
-
 #include <math.h>
 #include <signal.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <errno.h>
 #include <time.h>
 #include <setjmp.h>
@@ -19,30 +12,16 @@
 #define PRU_NUM 0
 #define OFFSET_SHAREDRAM 2048
 
-#define exitFunction(a) \
-	cleanup (a); \
-	return a;
-
 /*
- * Get rid of exitFunction macro
  * Motors are slow to respond
  * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
  * Replace pwm with pru program
  * Error checking
+ * Add y and z axies
+ * Improve vector functions
  * Clean up this abomination
  */
-
-static jmp_buf buf;
-
-void signalCatcher (int null)
-{
-	longjmp (buf, 1);
-}
-
-struct axisInfo xAxis;
-struct axisInfo yAxis;
-struct axisInfo zAxis;
 
 struct axisInfo {
 	FILE *run;
@@ -79,9 +58,28 @@ struct rampInfo {
         float time;
 };
 
-struct vector sensorInit = {0.0, 0.0, 0.0};
+static jmp_buf buf;
 
 static unsigned int *sharedMem_int;
+
+struct axisInfo xAxis;
+struct axisInfo yAxis;
+struct axisInfo zAxis;
+
+struct vector sensorInit = {0.0, 0.0, 0.0};
+
+void signalCatcher (int null)
+{
+	longjmp (buf, 1);
+}
+
+int compareFloats (const void *a, const void *b)
+{
+	const float *fa = (const float *)a;
+	const float *fb = (const float *)b;
+
+	return (*fa > *fb) - (*fa < *fb);
+}
 
 struct vector addVec (struct vector in1, struct vector in2)
 {
@@ -171,25 +169,17 @@ void startupAxis (struct axisInfo *axis, unsigned int number, char letter)
 	pclose (pipe);
 }
 
-unsigned int shutdownAxis (struct axisInfo *axis)
+void shutdownAxis (struct axisInfo *axis)
 {
-	if (axis->run) {
-		fprintf (axis->run, "0");
-		fclose (axis->run);
-	}
+	fprintf (axis->run, "0");
+	fclose (axis->run);
 
-	if (axis->duty) {
-		fprintf (axis->duty, "0");
-		fclose (axis->duty);
-	}
+	fprintf (axis->duty, "0");
+	fclose (axis->duty);
 
-	if (axis->period)
-		fclose (axis->period);
+	fclose (axis->period);
 
-	if (axis->direction)
-		fclose (axis->direction);
-
-	return 0;
+	fclose (axis->direction);
 }
 
 void waitEvent (void)
@@ -312,14 +302,6 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	nanosleep (&waitTime, NULL);
 }
 
-int compareFloats (const void *a, const void *b)
-{
-	const float *fa = (const float *)a;
-	const float *fb = (const float *)b;
-
-	return (*fa > *fb) - (*fa < *fb);
-}
-
 int main (int argc, char **argv)
 {
 	struct rampInfo ramp[2];
@@ -357,8 +339,6 @@ int main (int argc, char **argv)
 		fprintf (stderr, "Too many arguments\n");
 		return 1;
 	}
-
-	auto void cleanup (unsigned int success);
 
 	tpruss_intc_initdata pruss_intc_initdata=PRUSS_INTC_INITDATA;
 
@@ -481,24 +461,15 @@ int main (int argc, char **argv)
 		PID (point, velocity, time);
         }
 
+	shutdown:
+
 	free (arc);
 	free (line);
 
-	shutdown:
+	shutdownAxis (&xAxis);
+	shutdownAxis (&yAxis);
+	shutdownAxis (&zAxis);
 
-	exitFunction (0);
-
-	void cleanup (unsigned int success)
-	{
-		if (success) {
-			fprintf (stderr, "Bad exit\n");
-		}
-
-		shutdownAxis (&xAxis);
-		shutdownAxis (&yAxis);
-		shutdownAxis (&zAxis);
-
-		prussdrv_pru_disable (PRU_NUM);
-		prussdrv_exit ();
-	}
+	prussdrv_pru_disable (PRU_NUM);
+	prussdrv_exit ();
 }
