@@ -25,7 +25,6 @@
 
 /*
  * Get rid of exitFunction macro
- * Repace file functions with bash
  * Motors are slow to respond
  * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
@@ -133,85 +132,35 @@ float gettimefromfunction (struct timeval startTime)
 	return ((float)(curTime.tv_sec - startTime.tv_sec) * 1e3) + ((float)(curTime.tv_usec - startTime.tv_usec) * 1e-3);
 }
 
-unsigned int getFd (FILE **file, char *path, char *name)
+void startupAxis (struct axisInfo *axis, unsigned int number, char letter)
 {
-	auto void cleanup (unsigned int success);
+	FILE *pipe;
+	char bashCommand[22];
+	char runPath[37];
+	char dutyPath[38];
+	char periodPath[40];
+	char directionPath[29];
 
-	char *subPath;
-	glob_t globPath;
-	FILE *fd;
+	sprintf (bashCommand, "./startupAxis.sh %d %c", number, letter);
+	pipe = popen (bashCommand, "r");
 
-	if (!(subPath = malloc (2 + strlen (path) + strlen (name)))) {exitFunction (1);}
-	if ((snprintf (subPath, 2 + strlen (path) + strlen (name), "%s/%s", path, name)) < 0) {exitFunction (1);}
-	if (!(*file = fopen (subPath, "w"))) {exitFunction (1);}
+	fgets (runPath, 255, pipe);
+	runPath[36] = '\0';
+	axis->run = fopen (runPath, "w");
 
-	exitFunction (0);
+	fgets (dutyPath, 255, pipe);
+	dutyPath[37] = '\0';
+	axis->duty = fopen (dutyPath, "w");
 
-	void cleanup (unsigned int success)
-	{
-		if (subPath)
-			free (subPath);
-	}
-}
+	fgets (periodPath, 255, pipe);
+	periodPath[39] = '\0';
+	axis->period = fopen (periodPath, "w");
 
-unsigned int startupAxis (struct axisInfo *axis, unsigned int number, char letter)
-{
-	auto void cleanup (unsigned int success);
+	fgets (directionPath, 255, pipe);
+	directionPath[28] = '\0';
+	axis->direction = fopen (directionPath, "w");
 
-	char *path;
-	glob_t globPath;
-	unsigned int numChar;
-	char *gpioPath;
-
-	axis->run = NULL;
-	axis->duty = NULL;
-	axis->period = NULL;
-	axis->direction = NULL;
-
-	if (!(path = malloc (34))){exitFunction(1);}
-	if ((snprintf (path, 34, "/sys/devices/ocp.*/%c_axis_pwm.*", letter)) < 0) {exitFunction(1);}
-	if (glob (path, 0, NULL, &globPath)) {exitFunction(1);}
-
-	if (getFd (&axis->run, globPath.gl_pathv[0], "run")) {exitFunction(1);}
-	if (getFd (&axis->duty, globPath.gl_pathv[0], "duty")) {exitFunction(1);}
-	if (getFd (&axis->period, globPath.gl_pathv[0], "period")) {exitFunction(1);}
-
-	if (number < 10)
-		numChar = 1;
-	else if (number < 100)
-		numChar = 2;
-	else if (number < 1000)
-		numChar = 3;
-	else {
-		exitFunction (1);
-	}
-
-	if (!(gpioPath = malloc (27 + numChar))) {exitFunction(1);}
-	if ((snprintf (gpioPath, 27 + numChar, "/sys/class/gpio/gpio%d/value", number)) < 0) {exitFunction(1);}
-	if (!(axis->direction = fopen (gpioPath, "w"))) {exitFunction(1);}
-
-	if ((fprintf (axis->duty, "0")) < 0) {exitFunction(1);}
-	if (fflush (axis->duty)) {exitFunction(1);}
-
-	if ((fprintf (axis->run, "1")) < 0) {exitFunction(1);}
-	if (fflush (axis->run)) {exitFunction(1);}
-
-	if ((fprintf (axis->direction, "1")) < 0) {exitFunction(1);}
-	if (fflush (axis->direction)) {exitFunction(1);}
-
-	exitFunction (0);
-
-	void cleanup (unsigned int success)
-	{
-		if (success) {
-			fprintf (stderr, "Failed to initalize the %c axis, have you applied the device tree overlay?\n", letter);
-		}
-
-		if (path)
-			free (path);
-
-		globfree (&globPath);
-	}
+	pclose (pipe);
 }
 
 unsigned int shutdownAxis (struct axisInfo *axis)
@@ -409,9 +358,9 @@ int main (int argc, char **argv)
 	prussdrv_map_prumem (PRUSS0_SHARED_DATARAM, &sharedMem);
 	sharedMem_int = (unsigned int *)sharedMem;
 
-	if (startupAxis (&xAxis, 30, 'x')) {exitFunction (1);}
-	if (startupAxis (&yAxis, 60, 'y')) {exitFunction (1);}
-	if (startupAxis (&zAxis, 31, 'z')) {exitFunction (1);}
+	startupAxis (&xAxis, 30, 'x');
+	startupAxis (&yAxis, 60, 'y');
+	startupAxis (&zAxis, 31, 'z');
 
 	waitEvent ();
 
