@@ -31,25 +31,25 @@ struct axisInfo {
 };
 
 struct vector {
-        float	x,
-                y,
-                z;
+	float x;
+	float y;
+	float z;
 };
 
 struct arcInfo {
-        struct vector	toSurf,
-        		center,
-        		cross;
-        float	radius,
-		angle,
-		accel,
-		time;
+	struct vector toSurf;
+	struct vector center;
+	struct vector cross;
+	float radius;
+	float angle;
+	float accel;
+	float time;
 };
 
 struct lineInfo {
-        struct vector	velocity,
-        		start,
-        		end;
+        struct vector velocity;
+	struct vector start;
+	struct vector end;
         float time;
 };
 
@@ -138,6 +138,28 @@ float gettimefromfunction (struct timeval startTime)
 	return ((float)(curTime.tv_sec - startTime.tv_sec) * 1e3) + ((float)(curTime.tv_usec - startTime.tv_usec) * 1e-3);
 }
 
+void readPathFile (char *name, int *lineNum, struct rampInfo *ramp, struct arcInfo **arc, struct lineInfo **line)
+{
+	FILE *file;
+
+	if (!(file = fopen (name, "r"))) {
+		perror ("Failed to open file");
+		exit (1);
+	}
+
+	fread (lineNum, sizeof(int), 1, file);
+
+	fread (ramp, sizeof(struct rampInfo), 2, file);
+
+	*arc = malloc ((*lineNum - 2) * sizeof(struct arcInfo));
+	*line = malloc ((*lineNum - 1) * sizeof(struct lineInfo));
+
+	fread (*arc, sizeof(struct arcInfo), *lineNum - 2, file);
+	fread (*line, sizeof(struct lineInfo), *lineNum - 1, file);
+
+	fclose (file);
+}
+
 void startupAxis (struct axisInfo *axis, unsigned int number, char letter)
 {
 	FILE *pipe;
@@ -211,7 +233,39 @@ void readSensors (float *x, float *y, float *z)
 	*z = 0.0003904191149 * ((float)resultZ);
 }
 
-unsigned int setVelocity (struct axisInfo *axis, float velocity)
+void initSensors (void)
+{
+	unsigned int initPointNum = 100;
+	float *initArrayX;
+	float *initArrayY;
+	float *initArrayZ;
+	unsigned int i;
+
+	initArrayX = malloc (initPointNum * sizeof(*initArrayX));
+	initArrayY = malloc (initPointNum * sizeof(*initArrayY));
+	initArrayZ = malloc (initPointNum * sizeof(*initArrayZ));
+
+	for (i = initPointNum; i; i--) {
+		struct timespec waitTime = {0, 5000000};
+		readSensors (&initArrayX[i], &initArrayY[i], &initArrayZ[i]);
+		nanosleep (&waitTime, NULL);
+	}
+
+	qsort (initArrayX, initPointNum, sizeof(*initArrayX), compareFloats);
+	sensorInit.x = initArrayX[50];
+
+	qsort (initArrayY, initPointNum, sizeof(*initArrayY), compareFloats);
+	sensorInit.y = initArrayY[50];
+
+	qsort (initArrayZ, initPointNum, sizeof(*initArrayZ), compareFloats);
+	sensorInit.z = initArrayZ[50];
+
+	free (initArrayX);
+	free (initArrayY);
+	free (initArrayZ);
+}
+
+void setVelocity (struct axisInfo *axis, float velocity)
 {
 	static unsigned int direction = 1;
 	float speed;
@@ -243,8 +297,6 @@ unsigned int setVelocity (struct axisInfo *axis, float velocity)
 	fflush (axis->period);
 	fprintf (axis->duty, "%d", duty);
 	fflush (axis->duty);
-
-	return 0;
 }
 
 void PID (struct vector setPoint, struct vector velocity, float time)
@@ -268,6 +320,8 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	float Xest;
 
 	const float maxVel = 1.0;
+
+	struct timespec waitTime = {0, 5000000};
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
 	sensor.x -= sensorInit.x;
@@ -296,9 +350,8 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	lastError = error;
 	lastTime = time;
 
-	endFunc:;
+endFunc:
 
-	struct timespec waitTime = {0, 5000000};
 	nanosleep (&waitTime, NULL);
 }
 
@@ -308,9 +361,6 @@ int main (int argc, char **argv)
 	struct lineInfo *line;
 	struct arcInfo *arc;
 	int lineNum;
-	FILE *file;
-
-	struct timeval progStart;
 
 	float time = 0;
 	float startTime;
@@ -319,26 +369,22 @@ int main (int argc, char **argv)
         struct vector point = {0.0, 0.0, 0.0};
         struct vector velocity = {0.0, 0.0, 0.0};
 
-	const int initPointNum = 100;
-	float *initArrayX;
-	float *initArrayY;
-	float *initArrayZ;
+	struct timeval progStart;
 
 	unsigned int i;
-	unsigned int j;
 
 	if (setjmp (buf))
 		goto shutdown;
 
 	signal (SIGINT, signalCatcher);
 
-	if (argc < 2) {
-		fprintf (stderr, "You need to give a file name\n");
+	if (
+		((argc < 2) ? fprintf (stderr, "You need to give a file name\n") : 0) ||
+		((argc > 2) ? fprintf (stderr, "Too many arguments\n") : 0)
+	)
 		return 1;
-	} else if (argc > 2) {
-		fprintf (stderr, "Too many arguments\n");
-		return 1;
-	}
+
+	readPathFile (argv[1], &lineNum, ramp, &arc, &line);
 
 	tpruss_intc_initdata pruss_intc_initdata=PRUSS_INTC_INITDATA;
 
@@ -355,55 +401,13 @@ int main (int argc, char **argv)
 	startupAxis (&yAxis, 60, 'y');
 	startupAxis (&zAxis, 31, 'z');
 
-	waitEvent ();
-
-	if (!(file = fopen (argv[1], "r"))) {
-		perror ("Failed to open file");
-		exit (1);
-	}
-
-	fread (&lineNum, sizeof(int), 1, file);
-
-	fread (ramp, sizeof(struct rampInfo), 2, file);
-
-	arc = malloc ((lineNum - 2) * sizeof(struct arcInfo));
-	line = malloc ((lineNum - 1) * sizeof(struct lineInfo));
-
-	fread (arc, sizeof(struct arcInfo), lineNum - 2, file);
-	fread (line, sizeof(struct lineInfo), lineNum - 1, file);
-
-	fclose (file);
-
-	/*
-	 * Finding the sensors zero point
-	 */
-	initArrayX = malloc (initPointNum * sizeof(*initArrayX));
-	initArrayY = malloc (initPointNum * sizeof(*initArrayY));
-	initArrayZ = malloc (initPointNum * sizeof(*initArrayZ));
-
-	for (i = 0; i < initPointNum; i++) {
-		struct timespec waitTime = {0, 5000000};
-		readSensors (&initArrayX[i], &initArrayY[i], &initArrayZ[i]);
-		nanosleep (&waitTime, NULL);
-	}
-
-	qsort (initArrayX, initPointNum, sizeof(*initArrayX), compareFloats);
-	sensorInit.x = initArrayX[50];
-
-	qsort (initArrayY, initPointNum, sizeof(*initArrayY), compareFloats);
-	sensorInit.y = initArrayY[50];
-
-	qsort (initArrayZ, initPointNum, sizeof(*initArrayZ), compareFloats);
-	sensorInit.z = initArrayZ[50];
-
-	free (initArrayX);
-	free (initArrayY);
-	free (initArrayZ);
+	initSensors ();
 
 	sleep (1);
 
 	gettimeofday (&progStart, NULL);
 
+	//Wouldn't this just be 0.0?
 	time = gettimefromfunction (progStart) * 1e-3;
 
 	//Ramp up
@@ -461,7 +465,7 @@ int main (int argc, char **argv)
 		PID (point, velocity, time);
         }
 
-	shutdown:
+shutdown:
 
 	free (arc);
 	free (line);
@@ -472,4 +476,6 @@ int main (int argc, char **argv)
 
 	prussdrv_pru_disable (PRU_NUM);
 	prussdrv_exit ();
+
+	return 0;
 }
