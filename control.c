@@ -98,22 +98,19 @@ struct vector multVec (struct vector vec, float scaler)
         return (struct vector){vec.x * scaler, vec.y * scaler, vec.z * scaler};
 }
 
+struct vector divVec (struct vector vec, float scaler)
+{
+        return (struct vector){vec.x / scaler, vec.y / scaler, vec.z / scaler};
+}
+
 float magnitude (struct vector input)
 {
         return fabs (sqrt (pow (input.x, 2) + pow (input.y, 2) + pow (input.z, 2)));
 }
 
-int normalize (struct vector *input)
+void normalize (struct vector *input)
 {
-	float mag;
-	
-	mag = magnitude (*input);
-
-	input->x /= mag;
-	input->y /= mag;
-	input->z /= mag;
-
-	return 0;
+	*input = divVec (*input, magnitude (*input));
 }
 
 struct vector getArcPos (struct arcInfo arc, float angle)
@@ -316,7 +313,7 @@ struct vector PID (struct vector process, struct vector setPoint, float dt)
 
 	error = subVec (setPoint, process);
 	integral = addVec (integral, multVec (error, dt));
-	derivative = multVec (subVec (error, lastError), 1.0 / dt);
+	derivative = divVec (subVec (error, lastError), dt);
 
 	lastError = error;
 
@@ -342,10 +339,11 @@ void controls (struct vector setPoint, struct vector velocity, float time)
 	sensor = subVec (sensor, sensorInit);
 
 	dt = (time - lastTime);
+	lastTime = time;
 
 	if (fabs (sensor.x - X.x) > fabs (maxVel * dt)) {
 		puts ("bad data");
-		goto endFunc;
+		goto out;
 	}
 
 	kalman (&X, sensor, addVec (velocity, pidOut), dt);
@@ -354,10 +352,7 @@ void controls (struct vector setPoint, struct vector velocity, float time)
 
 	printf ("%f, %f, %f, %f\n", sensor.x, X.x, pidOut.x);
 
-	lastTime = time;
-
-endFunc:
-
+out:
 	nanosleep (&waitTime, NULL);
 }
 
