@@ -293,6 +293,15 @@ void setVelocity (struct axisInfo *axis, float *lastDir, float velocity)
 	fflush (axis->duty);
 }
 
+void kalman (struct vector *X, struct vector sensor, struct vector input, float dt)
+{
+	const float K = 0.4;
+	struct vector Xest;
+
+	Xest = addVec (*X, multVec (input, dt));
+	*X = addVec (Xest, multVec (subVec (sensor, Xest), K));
+}
+
 void PID (struct vector setPoint, struct vector velocity, float time)
 {
 	static float lastTime = 0.0;
@@ -302,16 +311,14 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	static float integral = 0.0;
 	static float derivative = 0.0;
 
-	float Kp = 10.0;
-	float Ki = 50.0;
-	float Kd = 0.5;
-	static float pidOut = 0.0;
+	const float Kp = 10.0;
+	const float Ki = 50.0;
+	const float Kd = 0.5;
+	static struct vector pidOut = {0.0, 0.0, 0.0};
 
 	struct vector sensor;
 
-	const float K = 0.4;
-	static float X = 0.0;
-	float Xest;
+	static struct vector X = {0.0, 0.0, 0.0};
 
 	const float maxVel = 1.0;
 
@@ -320,28 +327,25 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	static struct vector lastDir = {1.0, 1.0, 1.0};
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
-	sensor.x -= sensorInit.x;
-	sensor.y -= sensorInit.y;
-	sensor.z -= sensorInit.z;
+	sensor = subVec (sensor, sensorInit);
 
 	dt = (time - lastTime);
 
-	if (fabs (sensor.x - X) > fabs (maxVel * dt)) {
+	if (fabs (sensor.x - X.x) > fabs (maxVel * dt)) {
 		puts ("bad data");
 		goto endFunc;
 	}
 
-	Xest = X + ((velocity.x + pidOut) * dt);
-	X = Xest + (K * (sensor.x - Xest));
+	kalman (&X, sensor, addVec (velocity, pidOut), dt);
 
-	error = setPoint.x - X;
+	error = setPoint.x - X.x;
 	integral += error * dt;
 	derivative = (error - lastError) / dt;
 
-	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
+	pidOut.x = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
-	printf ("%f, %f, %f, %f\n", sensor.x, X, Xest, pidOut);
-	setVelocity (&xAxis, &lastDir.x, -velocity.x - pidOut);
+	printf ("%f, %f, %f, %f\n", sensor.x, X.x, pidOut.x);
+	setVelocity (&xAxis, &lastDir.x, -velocity.x - pidOut.x);
 
 	lastError = error;
 	lastTime = time;
