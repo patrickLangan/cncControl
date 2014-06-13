@@ -302,29 +302,6 @@ void kalman (struct vector *X, struct vector sensor, struct vector input, float 
 	*X = addVec (Xest, multVec (subVec (sensor, Xest), K));
 }
 
-/*
-float PID (float process, float setPoint, float dt)
-{
-	const float Kp = 10.0;
-	const float Ki = 50.0;
-	const float Kd = 0.5;
-
-	float error;
-	static float lastError = 0.0;
-
-	static float integral = 0.0;
-	float derivative;
-
-	error = setPoint - process;
-	integral += error * dt;
-	derivative = (error - lastError) / dt;
-
-	lastError = error;
-
-	return  (Kp * error) + (Ki * integral) + (Kd * derivative);
-}
-*/
-
 struct vector PID (struct vector process, struct vector setPoint, float dt)
 {
 	const float Kp = 10.0;
