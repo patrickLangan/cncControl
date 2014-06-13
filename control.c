@@ -302,29 +302,64 @@ void kalman (struct vector *X, struct vector sensor, struct vector input, float 
 	*X = addVec (Xest, multVec (subVec (sensor, Xest), K));
 }
 
-void PID (struct vector setPoint, struct vector velocity, float time)
+/*
+float PID (float process, float setPoint, float dt)
 {
-	static float lastTime = 0.0;
-	static float error = 0.0;
-	float lastError;
-	float dt;
-	static float integral = 0.0;
-	static float derivative = 0.0;
-
 	const float Kp = 10.0;
 	const float Ki = 50.0;
 	const float Kd = 0.5;
-	static struct vector pidOut = {0.0, 0.0, 0.0};
 
-	struct vector sensor;
+	float error;
+	static float lastError = 0.0;
 
-	static struct vector X = {0.0, 0.0, 0.0};
+	static float integral = 0.0;
+	float derivative;
 
-	const float maxVel = 1.0;
+	error = setPoint - process;
+	integral += error * dt;
+	derivative = (error - lastError) / dt;
 
-	struct timespec waitTime = {0, 5000000};
+	lastError = error;
 
+	return  (Kp * error) + (Ki * integral) + (Kd * derivative);
+}
+*/
+
+struct vector PID (struct vector process, struct vector setPoint, float dt)
+{
+	const float Kp = 10.0;
+	const float Ki = 50.0;
+	const float Kd = 0.5;
+
+	struct vector error;
+	static struct vector lastError = {0.0, 0.0, 0.0};
+
+	static struct vector integral = {0.0, 0.0, 0.0};
+	struct vector derivative;
+
+	error = subVec (setPoint, process);
+	integral = addVec (integral, multVec (error, dt));
+	derivative = multVec (subVec (error, lastError), 1.0 / dt);
+
+	lastError = error;
+
+	return (struct vector){
+		(Kp * error.x) + (Ki * integral.x) + (Kd * derivative.x),
+		(Kp * error.y) + (Ki * integral.y) + (Kd * derivative.y),
+		(Kp * error.z) + (Ki * integral.z) + (Kd * derivative.z)
+	};
+}
+
+void controls (struct vector setPoint, struct vector velocity, float time)
+{
 	static struct vector lastDir = {1.0, 1.0, 1.0};
+	static struct vector pidOut = {0.0, 0.0, 0.0};
+	static struct vector X = {0.0, 0.0, 0.0};
+	struct timespec waitTime = {0, 5000000};
+	static float lastTime = 0.0;
+	const float maxVel = 1.0;
+	struct vector sensor;
+	float dt;
 
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
 	sensor = subVec (sensor, sensorInit);
@@ -337,17 +372,11 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	}
 
 	kalman (&X, sensor, addVec (velocity, pidOut), dt);
-
-	error = setPoint.x - X.x;
-	integral += error * dt;
-	derivative = (error - lastError) / dt;
-
-	pidOut.x = (Ki * integral) + (Kp * error) + (Kd * derivative);
-
-	printf ("%f, %f, %f, %f\n", sensor.x, X.x, pidOut.x);
+	pidOut = PID (X, setPoint, dt);
 	setVelocity (&xAxis, &lastDir.x, -velocity.x - pidOut.x);
 
-	lastError = error;
+	printf ("%f, %f, %f, %f\n", sensor.x, X.x, pidOut.x);
+
 	lastTime = time;
 
 endFunc:
@@ -416,7 +445,7 @@ int main (int argc, char **argv)
 		point = multVec (ramp[0].accel, 0.5 * pow (diffTime, 2.0));
 		velocity = multVec (ramp[0].accel, diffTime);
 		printf ("%f, ", point.x);
-		PID (point, velocity, time);
+		controls (point, velocity, time);
         }
 
         for (i = 0; ; i++) {
@@ -426,7 +455,7 @@ int main (int argc, char **argv)
 			point = addVec (line[i].start, multVec (line[i].velocity, diffTime));
 			velocity = line[i].velocity;
 			printf ("%f, ", point.x);
-			PID (point, velocity, time);
+			controls (point, velocity, time);
 		}
 
                 if (i == lineNum - 2)
@@ -452,7 +481,7 @@ int main (int argc, char **argv)
 			velMag = ((magnitude (line[i + 1].velocity) - magnitude (line[i].velocity)) * (diffTime / arc[i].time)) + magnitude (line[i].velocity);
 			velocity = multVec (tangent, velMag);
 
-			PID (point, velocity, time);
+			controls (point, velocity, time);
 		}
         }
 
@@ -462,7 +491,7 @@ int main (int argc, char **argv)
 		point = addVec (line[lineNum - 2].end, addVec (multVec (ramp[1].accel, -0.5 * pow (diffTime, 2.0)), multVec (line[lineNum - 2].velocity, diffTime)));
 		velocity = addVec (multVec (ramp[1].accel, diffTime), line[lineNum - 2].velocity);
 		printf ("%f, ", point.x);
-		PID (point, velocity, time);
+		controls (point, velocity, time);
         }
 
 shutdown:
