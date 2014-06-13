@@ -13,6 +13,7 @@
 #define OFFSET_SHAREDRAM 2048
 
 /*
+ * Test to see if device tree is up
  * Motors are slow to respond
  * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
@@ -20,6 +21,7 @@
  * Error checking
  * Add y and z axies
  * Improve vector functions
+ * Limit lines to 80 chars
  * Clean up this abomination
  */
 
@@ -265,31 +267,28 @@ void initSensors (void)
 	free (initArrayZ);
 }
 
-void setVelocity (struct axisInfo *axis, float velocity)
+void setVelocity (struct axisInfo *axis, float *lastDir, float velocity)
 {
-	static unsigned int direction = 1;
-	float speed;
 	unsigned int period;
 	unsigned int duty;
 
 	if (velocity < 0) {
-		speed = fabs (velocity);
-		if (direction != 0) {
-			direction = 0;
+		velocity = fabs (velocity);
+		if (*lastDir != 0) {
+			*lastDir = 0;
 			fprintf (axis->direction, "0");
 			fflush (axis->direction);
 		}
 	} else {
-		speed = velocity;
-		if (direction != 1) {
-			direction = 1;
+		if (*lastDir != 1) {
+			*lastDir = 1;
 			fprintf (axis->direction, "1");
 			fflush (axis->direction);
 		}
 	}
 
-	period = (int)(500000.0 / speed);
-	duty = (int)(250000.0 / speed);
+	period = (int)(500000.0 / velocity);
+	duty = (int)(250000.0 / velocity);
 
 	fprintf (axis->duty, "0");
 	fflush (axis->duty);
@@ -323,6 +322,8 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 
 	struct timespec waitTime = {0, 5000000};
 
+	static struct vector lastDir = {1.0, 1.0, 1.0};
+
 	readSensors (&sensor.x, &sensor.y, &sensor.z);
 	sensor.x -= sensorInit.x;
 	sensor.y -= sensorInit.y;
@@ -345,7 +346,7 @@ void PID (struct vector setPoint, struct vector velocity, float time)
 	pidOut = (Ki * integral) + (Kp * error) + (Kd * derivative);
 
 	printf ("%f, %f, %f, %f\n", sensor.x, X, Xest, pidOut);
-	setVelocity (&xAxis, -velocity.x - pidOut);
+	setVelocity (&xAxis, &lastDir.x, -velocity.x - pidOut);
 
 	lastError = error;
 	lastTime = time;
