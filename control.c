@@ -118,8 +118,8 @@ int normalize (struct vector *input)
 
 struct vector getArcPos (struct arcInfo arc, float angle)
 {
-        float  cosAngle,
-                sinAngle;
+        float	cosAngle,
+		sinAngle;
 
         cosAngle = cos (angle);
         sinAngle = sin (angle);
@@ -162,33 +162,28 @@ void readPathFile (char *name, int *lineNum, struct rampInfo *ramp, struct arcIn
 	fclose (file);
 }
 
+FILE *openLine (FILE *pipe, unsigned int length)
+{
+	char line[99];
+
+	fgets (line, 99, pipe);
+	line[length] = '\0';
+
+	return fopen (line, "w");
+}
+
 void startupAxis (struct axisInfo *axis, unsigned int number, char letter)
 {
 	FILE *pipe;
 	char bashCommand[22];
-	char runPath[37];
-	char dutyPath[38];
-	char periodPath[40];
-	char directionPath[29];
 
 	sprintf (bashCommand, "./startupAxis.sh %d %c", number, letter);
 	pipe = popen (bashCommand, "r");
 
-	fgets (runPath, 255, pipe);
-	runPath[36] = '\0';
-	axis->run = fopen (runPath, "w");
-
-	fgets (dutyPath, 255, pipe);
-	dutyPath[37] = '\0';
-	axis->duty = fopen (dutyPath, "w");
-
-	fgets (periodPath, 255, pipe);
-	periodPath[39] = '\0';
-	axis->period = fopen (periodPath, "w");
-
-	fgets (directionPath, 255, pipe);
-	directionPath[28] = '\0';
-	axis->direction = fopen (directionPath, "w");
+	axis->run = openLine (pipe, 36);
+	axis->duty = openLine (pipe, 37);
+	axis->period = openLine (pipe, 39);
+	axis->direction = openLine (pipe, 28);
 
 	pclose (pipe);
 }
