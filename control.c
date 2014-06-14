@@ -9,11 +9,11 @@
 #include <prussdrv.h>
 #include <pruss_intc_mapping.h>
 
-#define PRU_NUM 0
 #define OFFSET_SHAREDRAM 2048
 
 /*
  * Test to see if device tree is up
+ * Make sure that PRUWait is working
  * Motors are slow to respond
  * Jumps in position between lines and arcs
  * Only run when a new sensor reading comes in
@@ -21,6 +21,7 @@
  * Error checking
  * Add y and z axies
  * Improve vector functions
+ * Use vector functions more
  * Limit lines to 80 chars
  * Clean up this abomination
  */
@@ -128,6 +129,39 @@ struct vector getArcPos (struct arcInfo arc, float angle)
         };
 }
 
+void PRUWait (void)
+{
+	prussdrv_pru_wait_event (PRU_EVTOUT_0);
+	prussdrv_pru_wait_event (PRU_EVTOUT_0);
+	prussdrv_pru_clear_event (PRU0_ARM_INTERRUPT);
+}
+
+void PRUInit (void)
+{
+	tpruss_intc_initdata pruss_intc_initdata=PRUSS_INTC_INITDATA;
+	static void *sharedMem;
+
+	prussdrv_init();
+
+	if (prussdrv_open (PRU_EVTOUT_0) == -1) {
+		puts ("Failed to initialize the PRU's memory mapping");
+		exit (1);
+	}
+
+	if (prussdrv_pruintc_init (&pruss_intc_initdata) == -1) {
+		puts ("Failed to initialize the PRU's interrupt controller");
+		exit (1);
+	}
+
+	if (prussdrv_exec_program (0, "./sensor.bin") == -1) {
+		puts ("Failed to execute PRU program");
+		exit (1);
+	}
+
+	prussdrv_map_prumem (PRUSS0_SHARED_DATARAM, &sharedMem);
+	sharedMem_int = (unsigned int *)sharedMem;
+}
+
 float gettimefromfunction (struct timeval startTime)
 {
 	struct timeval curTime;
@@ -198,14 +232,6 @@ void shutdownAxis (struct axisInfo *axis)
 	fclose (axis->direction);
 }
 
-void waitEvent (void)
-{
-	prussdrv_pru_wait_event (PRU_EVTOUT_0);
-	prussdrv_pru_clear_event (PRU0_ARM_INTERRUPT);
-	prussdrv_pru_wait_event (PRU_EVTOUT_0);
-	prussdrv_pru_clear_event (PRU0_ARM_INTERRUPT);
-}
-
 void readSensors (float *x, float *y, float *z)
 {
 	int resultX = sharedMem_int[OFFSET_SHAREDRAM + 0];
@@ -240,9 +266,8 @@ void initSensors (void)
 	initArrayZ = malloc (initPointNum * sizeof(*initArrayZ));
 
 	for (i = initPointNum; i; i--) {
-		struct timespec waitTime = {0, 5000000};
 		readSensors (&initArrayX[i], &initArrayY[i], &initArrayZ[i]);
-		nanosleep (&waitTime, NULL);
+		PRUWait ();
 	}
 
 	qsort (initArrayX, initPointNum, sizeof(*initArrayX), compareFloats);
@@ -324,12 +349,11 @@ struct vector PID (struct vector process, struct vector setPoint, float dt)
 	};
 }
 
-void controls (struct vector setPoint, struct vector velocity, float time)
+int controls (struct vector setPoint, struct vector velocity, float time)
 {
 	static struct vector lastDir = {1.0, 1.0, 1.0};
 	static struct vector pidOut = {0.0, 0.0, 0.0};
 	static struct vector X = {0.0, 0.0, 0.0};
-	struct timespec waitTime = {0, 5000000};
 	static float lastTime = 0.0;
 	const float maxVel = 1.0;
 	struct vector sensor;
@@ -343,7 +367,7 @@ void controls (struct vector setPoint, struct vector velocity, float time)
 
 	if (fabs (sensor.x - X.x) > fabs (maxVel * dt)) {
 		puts ("bad data");
-		goto out;
+		return 1;
 	}
 
 	kalman (&X, sensor, addVec (velocity, pidOut), dt);
@@ -352,8 +376,7 @@ void controls (struct vector setPoint, struct vector velocity, float time)
 
 	printf ("%f, %f, %f, %f\n", sensor.x, X.x, pidOut.x);
 
-out:
-	nanosleep (&waitTime, NULL);
+	return 0;
 }
 
 int main (int argc, char **argv)
@@ -387,24 +410,14 @@ int main (int argc, char **argv)
 
 	readPathFile (argv[1], &lineNum, ramp, &arc, &line);
 
-	tpruss_intc_initdata pruss_intc_initdata=PRUSS_INTC_INITDATA;
-
-	prussdrv_init();
-	prussdrv_open(PRU_EVTOUT_0);
-	prussdrv_pruintc_init(&pruss_intc_initdata);
-	prussdrv_exec_program(PRU_NUM,"./sensor.bin");
-
-	static void *sharedMem;
-	prussdrv_map_prumem (PRUSS0_SHARED_DATARAM, &sharedMem);
-	sharedMem_int = (unsigned int *)sharedMem;
-
 	startupAxis (&xAxis, 30, 'x');
 	startupAxis (&yAxis, 60, 'y');
 	startupAxis (&zAxis, 31, 'z');
 
-	initSensors ();
+	PRUInit ();
+	PRUWait ();
 
-	sleep (1);
+	initSensors ();
 
 	gettimeofday (&progStart, NULL);
 
@@ -418,6 +431,7 @@ int main (int argc, char **argv)
 		velocity = multVec (ramp[0].accel, diffTime);
 		printf ("%f, ", point.x);
 		controls (point, velocity, time);
+		PRUWait ();
         }
 
         for (i = 0; ; i++) {
@@ -428,6 +442,7 @@ int main (int argc, char **argv)
 			velocity = line[i].velocity;
 			printf ("%f, ", point.x);
 			controls (point, velocity, time);
+			PRUWait ();
 		}
 
                 if (i == lineNum - 2)
@@ -454,6 +469,8 @@ int main (int argc, char **argv)
 			velocity = multVec (tangent, velMag);
 
 			controls (point, velocity, time);
+
+			PRUWait ();
 		}
         }
 
@@ -464,6 +481,7 @@ int main (int argc, char **argv)
 		velocity = addVec (multVec (ramp[1].accel, diffTime), line[lineNum - 2].velocity);
 		printf ("%f, ", point.x);
 		controls (point, velocity, time);
+		PRUWait ();
         }
 
 shutdown:
@@ -475,7 +493,7 @@ shutdown:
 	shutdownAxis (&yAxis);
 	shutdownAxis (&zAxis);
 
-	prussdrv_pru_disable (PRU_NUM);
+	prussdrv_pru_disable (0);
 	prussdrv_exit ();
 
 	return 0;
